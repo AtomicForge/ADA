@@ -94,40 +94,58 @@ def _make_tags(buffer):
         buffer.create_tag(name, weight=Pango.Weight.BOLD, scale=scale)
 
 
-class ChatPage(Gtk.Box):
-    """One chat: the text so far, a model chooser, an input line, Send/Stop.
-    The text is shown in a TextView, which never interprets markup."""
+_css_ready = False
 
-    def __init__(self, store, on_change, chat_id=None, model=None):
+
+def _install_css():
+    """Style of the question bubble (once per program run)."""
+    global _css_ready
+    if _css_ready:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_string(
+        ".bubble { background-color: shade(@accent_bg_color, 0.7); color: @accent_fg_color; border-radius: 18px; padding: 8px 14px; }")
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _css_ready = True
+
+
+class ChatPage(Gtk.Box):
+    """One chat: questions in bubbles, answers below them (each in its own
+    TextView, which never interprets markup), a model chooser, an input line, Send/Stop."""
+
+    def __init__(self, store, on_change, chat_id=None, model=None, incognito=False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6,
                          margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
         self._store = store
         self._on_change = on_change
         self._chat_id = chat_id
         self._wanted_model = model
+        self._incognito, self._history = incognito, []  # incognito: the chat lives only in this list
         self._stream = None
         self._busy = False  # from sending until the answer is finished
         self._stopped = False
         self._answer = []
         self._answer_len, self._too_long = 0, False
         self._last_model, self._last_text = None, ""
-        self._text = Gtk.TextView(editable=False, cursor_visible=False, left_margin=6, right_margin=6,
-                                  wrap_mode=Gtk.WrapMode.WORD_CHAR, css_classes=["chat"])
-        self._buffer = self._text.get_buffer()
-        _make_tags(self._buffer)
-        self._answer_mark = None
+        _install_css()
+        self._box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                            margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+        self._scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                          child=self._box)
+        self._view, self._buffer = None, None  # the answer that is being written
         if chat_id is not None:
             for m in store.get_messages(chat_id):
                 if m["role"] == "user":
-                    self._show("You: " + m["content"] + "\n\n")
+                    self._add_question(m["content"])
                 else:
-                    self._show("ADA: ")
-                    self._show_rich(m["content"])
-                    self._show("\n\n")
-        scroll = Gtk.ScrolledWindow(vexpand=True, child=self._text)
-        self.append(scroll)
+                    self._add_answer(m["content"])
+        if incognito:
+            self.append(Gtk.Label(label="Incognito: this chat is not saved and does not use or change the memory.",
+                                  xalign=0, wrap=True, css_classes=["dim-label"]))
+        self.append(self._scroll)
         if chat_id is not None:  # an old chat opens at its end
-            adjustment = scroll.get_vadjustment()
+            adjustment = self._scroll.get_vadjustment()
             pin = adjustment.connect("changed", self._to_bottom)  # the height is known step by step
             GLib.timeout_add(1500, self._unpin, adjustment, pin)
         self._info = Gtk.Label(xalign=0, wrap=True, css_classes=["dim-label"])
@@ -259,16 +277,60 @@ class ChatPage(Gtk.Box):
             else:
                 self._buffer.insert(end, piece)
 
-    def _format_answer(self):
+    def _add_question(self, text):
+        """The owner's message in a round bubble. A Label shows plain text only."""
+        label = Gtk.Label(label=text, use_markup=False, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+                          xalign=0, selectable=True, max_width_chars=60)
+        bubble = Gtk.Box(halign=Gtk.Align.END, css_classes=["bubble"])
+        bubble.append(label)
+        self._box.append(bubble)
+        return bubble
+
+    def _add_answer(self, text=""):
+        """A TextView for one answer. With a text (old chat): formatted, with a Copy button."""
+        view = Gtk.TextView(editable=False, cursor_visible=False, left_margin=6, right_margin=6,
+                            wrap_mode=Gtk.WrapMode.WORD_CHAR, css_classes=["chat"])
+        self._view, self._buffer = view, view.get_buffer()
+        _make_tags(self._buffer)
+        self._box.append(view)
+        if text:
+            self._show_rich(text)
+            self._add_copy(text)
+        return view
+
+    def _add_copy(self, text):
+        """One Copy button under a finished answer; it copies the original text."""
+        button = Gtk.Button(label="Copy", halign=Gtk.Align.START, css_classes=["flat"])
+        button.connect("clicked", self._copy, text)
+        self._box.append(button)
+
+    def _copy(self, button, text):
+        self.get_clipboard().set_content(Gdk.ContentProvider.new_for_value(text))
+        button.set_label("Copied")
+        GLib.timeout_add(1500, self._uncopy, button)
+
+    @staticmethod
+    def _uncopy(button):
+        button.set_label("Copy")
+        return False  # run only once
+
+    def _scroll_to(self, widget):
+        ok, rect = widget.compute_bounds(self._box)
+        if ok:
+            self._scroll.get_vadjustment().set_value(rect.get_y())
+        return False  # run only once
+
+    def _format_answer(self, shown):
         """The answer streams as plain text; when it is complete, show it formatted."""
-        mark, self._answer_mark = self._answer_mark, None
-        if mark is None:
+        if self._view is None:
             return
-        shown = "".join(self._answer)
         if shown:
-            self._buffer.delete(self._buffer.get_iter_at_mark(mark), self._buffer.get_end_iter())
+            self._buffer.set_text("")
             self._show_rich(shown)
-        self._buffer.delete_mark(mark)
+            self._add_copy(shown)
+        else:
+            self._box.remove(self._view)  # nothing was answered: no empty box
+        self._view, self._buffer = None, None
 
     def _send(self, *_):
         text = self._entry.get_text().strip()
@@ -280,13 +342,17 @@ class ChatPage(Gtk.Box):
             return
         model = item.get_string()
         try:
-            if self._chat_id is None:
-                self._chat_id = self._store.create_chat(text[:40], model)
-            self._store.add_message(self._chat_id, "user", text)
-            messages = self._store.get_messages(self._chat_id)
-            memory = self._store.get_memory().strip()
-            if memory:  # the memory is active in every chat
-                messages = [{"role": "system", "content": MEMORY_HEADER + memory}] + messages
+            if self._incognito:  # nothing is stored, the memory is not used
+                self._history.append({"role": "user", "content": text})
+                messages = list(self._history)
+            else:
+                if self._chat_id is None:
+                    self._chat_id = self._store.create_chat(text[:40], model)
+                self._store.add_message(self._chat_id, "user", text)
+                messages = self._store.get_messages(self._chat_id)
+                memory = self._store.get_memory().strip()
+                if memory:  # the memory is active in every normal chat
+                    messages = [{"role": "system", "content": MEMORY_HEADER + memory}] + messages
         except StoreError as exc:
             self._status.set_text(str(exc))
             return
@@ -299,11 +365,9 @@ class ChatPage(Gtk.Box):
         self._answer_len, self._too_long = 0, False
         self._last_model, self._last_text = model, text
         self._busy, self._stopped = True, False
-        start = self._buffer.create_mark(None, self._buffer.get_end_iter(), True)
-        self._show(f"You: {text}\n\nADA: ")
-        self._answer_mark = self._buffer.create_mark(None, self._buffer.get_end_iter(), True)
-        self._text.scroll_to_mark(start, 0.0, True, 0.0, 0.0)  # once: your question at the top
-        self._buffer.delete_mark(start)
+        bubble = self._add_question(text)
+        self._add_answer()
+        GLib.timeout_add(100, self._scroll_to, bubble)  # once: your question at the top
         query = text if self._search.get_active() else ""
         self._info.set_text("Searching the web …" if query else self._WAITING)
         threading.Thread(target=self._prepare, args=(model, messages, query, self._searx_url()),
@@ -380,18 +444,19 @@ class ChatPage(Gtk.Box):
         if self._too_long:
             error = error or "The answer was too long and was stopped. Only the beginning is saved."
         try:
-            if answer:
+            if answer and self._incognito:
+                self._history.append({"role": "assistant", "content": answer})
+            elif answer:
                 self._store.add_message(self._chat_id, "assistant", answer)
         except StoreError as exc:
             error = error or str(exc)
-        self._format_answer()
-        self._show("\n\n")
+        self._format_answer(answer)
         self._on_change()
         self._status.set_text(error)
         self._stream = None
         self._busy = False
         self._info.set_text("")
-        if answer and not error and not self._stopped and len(self._last_text) >= 20 \
+        if answer and not self._incognito and not error and not self._stopped and len(self._last_text) >= 20 \
                 and self._setting("auto_memory") != "0":
             threading.Thread(target=self._remember, args=(self.url(), self._last_model, self._last_text),
                              daemon=True).start()
@@ -572,6 +637,10 @@ class Window(Adw.ApplicationWindow):
         self.add_controller(keys)
 
     def _on_key(self, _controller, keyval, _code, state):
+        if (self._store and self.get_visible_dialog() is None and state & Gdk.ModifierType.CONTROL_MASK
+                and keyval in (Gdk.KEY_s, Gdk.KEY_S)):  # Ctrl+S: show or hide the sidebar
+            self._split.set_show_sidebar(not self._split.get_show_sidebar())
+            return True
         blocked = (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK
                    | Gdk.ModifierType.META_MASK | Gdk.ModifierType.SUPER_MASK)
         if not self._chat or self.get_visible_dialog() is not None or state & blocked:
@@ -581,7 +650,7 @@ class Window(Adw.ApplicationWindow):
     def _unlocked(self, store):
         self._store = store
         self._split = Adw.OverlaySplitView(show_sidebar=True)
-        toggle = Gtk.ToggleButton(icon_name="sidebar-show-symbolic", tooltip_text="Sidebar")
+        toggle = Gtk.ToggleButton(icon_name="sidebar-show-symbolic", tooltip_text="Sidebar (Ctrl+S)")
         toggle.bind_property("active", self._split, "show-sidebar",
                              GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
         self._header.pack_start(toggle)
@@ -593,19 +662,23 @@ class Window(Adw.ApplicationWindow):
         self._header.pack_end(settings)
         new = Gtk.Button(label="New chat", margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
         new.connect("clicked", lambda *_: self._open())
+        ghost = Gtk.Button(label="Incognito chat", margin_bottom=6, margin_start=6, margin_end=6,
+                           tooltip_text="Not saved, no memory")
+        ghost.connect("clicked", lambda *_: self._open(incognito=True))
         self._list = Gtk.ListBox(css_classes=["navigation-sidebar"])
         self._list.connect("row-activated", self._row_activated)
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         side.append(new)
+        side.append(ghost)
         side.append(Gtk.ScrolledWindow(vexpand=True, child=self._list))
         self._split.set_sidebar(side)
         self._view.set_content(self._split)
         self._open()
 
-    def _open(self, chat_id=None, model=None):
+    def _open(self, chat_id=None, model=None, incognito=False):
         if self._chat:
             self._chat.stop()
-        self._chat = ChatPage(self._store, self._refresh, chat_id, model)
+        self._chat = ChatPage(self._store, self._refresh, chat_id, model, incognito)
         self._split.set_content(self._chat)
         self._refresh()
         GLib.idle_add(self._chat.focus_input)  # ready to type
