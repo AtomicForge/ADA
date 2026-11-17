@@ -1,72 +1,78 @@
-# LOOMIS
+# ADA
 
-**A transparent, no-binary-blobs multiboot solution — no proprietary bootloader components, fully auditable from source.**
+A secure, native chat client for [Ollama](https://ollama.com). GTK4 and libadwaita, Wayland only, built as a Flatpak.
 
-> ⚠️ **Status:** Early development / pre-MVP. Architecture and scope are still being finalized. This README reflects the current target design and will be updated as decisions are made.
+ADA keeps your chats and a persistent cross-chat memory in an **encrypted database** (SQLCipher). The passphrase is typed at every start and never stored. If the database file ever leaves your machine (backup, file sync, copy), it stays unreadable.
 
-## Why LOOMIS?
+> **Status: experimental, not audited.** Please read [SECURITY.md](SECURITY.md) before you trust it with anything sensitive.
 
-Existing multiboot USB tools (like Ventoy) work well but are closed enough, in parts, that a full independent audit isn't practical for security-sensitive deployments. LOOMIS aims to be a fully open, auditable alternative:
+> **AI disclosure.** ADA was written with AI assistance (Anthropic's Claude) and tested by the maintainer, who is not a professional developer. The app icon was created with an AI image tool. Independent review is very welcome.
 
-- No proprietary or unauditable binary blobs
-- Every component built from pinned, reviewable source
-- Suitable for private users up to enterprise, government, and public-sector deployment
-- A contribution to digital sovereignty — usable equally by anyone, anywhere, independent of any single country's software supply chain
+![ADA](data/icons/io.github.AtomicForge.Ada-256.png)
 
-## Goals
+## Features
 
-- **Simple UX:** install LOOMIS once, copy ISO files to your boot medium, boot — no manual extraction, no per-distro config, no manual bootloader entries.
-- **Broad OS support:** Linux and Windows as first-class targets.
-- **Security-first boot chain:** Secure Boot, UEFI and legacy BIOS, x86_64 and aarch64.
-- **Generic over special-cased:** prefer generic ISO-boot mechanisms; isolate any OS-specific handling behind a modular compatibility layer instead of hardcoding per-distro logic.
-- **Reproducible and minimal:** small dependency surface, reproducible builds, clear interfaces, automated testing.
+- Chat with your local Ollama models, streamed live, with a stop button
+- Your messages in speech bubbles, a copy button under every answer, `Ctrl+S` shows or hides the sidebar
+- **Answer length:** Compact, Medium or Detailed
+- **Incognito chats:** not saved, no memory used, nothing added to the memory
+- Chat list: new, rename, delete
+- **Encrypted storage** for chats, titles, memory and settings
+- **Memory** across chats: one text you can read and edit, used in every normal chat. ADA adds facts about you automatically from your own messages (can be switched off in Settings)
+- Optional **web search** through your own SearXNG container
+- "Find automatically" for Ollama and SearXNG on localhost
+- Answers are shown with a small, safe Markdown subset (headings, bold, italic, code, lists); links, images and HTML are never interpreted
+- Small codebase, one third-party dependency (`sqlcipher3`)
+- English interface only
 
-## Non-goals (for now)
+## Install
 
-- BSD support (FreeBSD/OpenBSD/NetBSD) — planned as future/optional scope, not blocking the Linux/Windows MVP.
-- Exhaustive per-distro special handling — niche distros get generic/best-effort support rather than dedicated code paths.
+Download the `.flatpak` file from the [latest release](../../releases/latest), check the SHA-256 sum shown in the release notes, then:
 
-## Architecture
+```
+sha256sum io.github.AtomicForge.Ada-*.flatpak
+flatpak install --user io.github.AtomicForge.Ada-*.flatpak
+flatpak run io.github.AtomicForge.Ada
+```
 
-- Bootloader: GRUB2
-- Partition layout: *not yet documented*
-- Secure Boot trust model: *not yet decided* (shim + Microsoft signing infrastructure vs. a LOOMIS-controlled trust chain with own keys)
-- ISO compatibility handling: *not yet documented*
+You need a running Ollama server (default `http://localhost:11434`), for example in Podman. For web search you also need SearXNG with JSON output enabled: in SearXNG's `settings.yml`, add `json` under `search:` → `formats:`.
 
-See [`docs/architecture.md`](docs/architecture.md) for full design rationale and rejected alternatives.
+The Flatpak has only three permissions: Wayland, network (to reach Ollama and SearXNG) and GPU (`dri`). Your data lives in `~/.var/app/io.github.AtomicForge.Ada/data/ada/`.
 
-## Supported targets (planned)
+## Build from source (Flatpak)
 
-| Category | Targets |
-|---|---|
-| Linux (priority) | Debian, Ubuntu LTS, Linux Mint, Pop!_OS, Fedora, RHEL, Rocky Linux, AlmaLinux, SUSE Linux Enterprise, openSUSE, Arch Linux, Gentoo, NixOS, Void Linux, Alpine |
-| Linux (generic support) | Kali, elementary OS, Zorin OS, MX Linux, Manjaro, EndeavourOS, Tails, Qubes OS |
-| Windows | Windows 10, Windows 11 |
-| Future/optional | FreeBSD, OpenBSD, NetBSD |
+You need Flatpak with the GNOME 51 runtime and SDK, and `org.flatpak.Builder`:
 
-## Installation
+```
+flatpak install --user flathub org.gnome.Sdk//51 org.flatpak.Builder
+flatpak run org.flatpak.Builder --user --install --force-clean build-dir io.github.AtomicForge.Ada.yaml
+flatpak run io.github.AtomicForge.Ada
+```
 
-*Coming soon — no installable release yet.*
+## Run from source and test
 
-## Usage
+You need GTK 4, libadwaita 1 and PyGObject, plus the pinned database binding in a virtual environment:
 
-1. Install LOOMIS to your target boot medium.
-2. Copy your ISO file(s) onto it.
-3. Boot and select the OS to boot.
+```
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install --require-hashes -r requirements.txt
+.venv/bin/python -m unittest discover -s tests
+.venv/bin/python -m ada
+```
 
-## Contributing
+The tests for networking, storage and rendering run without a display.
 
-LOOMIS is intended to be fully auditable — contributions and independent code review are especially welcome, including from people without prior context on the project's design decisions.
+## Known limitations
 
-*Contribution guidelines coming soon.*
+- A forgotten passphrase cannot be recovered. This is by design.
+- No passphrase change, no export, no automatic lock after inactivity.
+- No file or image upload yet (planned).
+- With web search on, your message is sent to your SearXNG, which forwards it to its search engines. ADA does not show the source URLs under the answer yet.
+- Models can cut an answer when their context window is small. There is no context-size setting yet.
+- Python cannot reliably wipe the passphrase or chat text from memory, so incognito chats are not protected against memory forensics.
 
 ## License
 
-Licensed under the [GNU General Public License v3.0](LICENSE) (GPLv3).
+GPL-3.0-or-later, see [LICENSE](LICENSE).
 
-## Status / Roadmap
-
-- [ ] Windows ISO boot investigation (unmodified ISO on data partition, direct boot)
-- [ ] Secure Boot trust model decision (shim vs. MOK/own keys)
-- [ ] MVP: Linux + Windows core boot flow
-- [ ] Enterprise/government hardening (TPM 2.0, signed components, supply-chain security docs)
+ADA uses [sqlcipher3](https://github.com/coleifer/sqlcipher3) (zlib license) and [SQLCipher](https://www.zetetic.net/sqlcipher/) by Zetetic (BSD-style license). The Flatpak builds SQLCipher 4.20.0 from the official source and checks the generated file against a pinned checksum.
