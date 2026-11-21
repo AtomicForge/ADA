@@ -20,8 +20,8 @@
     <p>ADA is experimental and has not been audited. If you forget the passphrase, your data cannot be recovered. Model answers are shown as plain text. ADA needs a running Ollama server; it does not include one.</p>
   </description>
   <launchable type="desktop-id">io.github.AtomicForge.Ada.desktop</launchable>
-  <url type="homepage">https://github.com/AtomicForge/Ada</url>
-  <url type="bugtracker">https://github.com/AtomicForge/Ada/issues</url>
+  <url type="homepage">https://github.com/AtomicForge/ADA</url>
+  <url type="bugtracker">https://github.com/AtomicForge/ADA/issues</url>
   <categories>
     <category>Utility</category>
   </categories>
