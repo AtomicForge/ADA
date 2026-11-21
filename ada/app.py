@@ -429,10 +429,17 @@ class ChatPage(Gtk.Box):
             error = str(exc)
         GLib.idle_add(self._finished, error)
 
-    def _remember(self, url, model, text):
+    def _memory_text(self):
+        """Read in the UI thread (the database is used there only) for the proposal call."""
+        try:
+            return self._store.get_memory()
+        except StoreError:
+            return ""
+
+    def _remember(self, url, model, text, known):
         """Background: ask for facts in the owner's newest message only, then save new ones."""
         try:
-            facts = propose_memory(url, model, [text])
+            facts = propose_memory(url, model, [text], known=known)
         except OllamaError:
             return  # no memory update this time; nothing else is lost
         GLib.idle_add(self._remembered, facts)
@@ -478,7 +485,8 @@ class ChatPage(Gtk.Box):
         self._info.set_text("")
         if answer and not self._incognito and not error and not self._stopped and len(self._last_text) >= 20 \
                 and self._setting("auto_memory") != "0":
-            threading.Thread(target=self._remember, args=(self.url(), self._last_model, self._last_text),
+            threading.Thread(target=self._remember, args=(self.url(), self._last_model, self._last_text,
+                                   self._memory_text()),
                              daemon=True).start()
         self._button.set_label("Send")
         self._entry.set_sensitive(True)
